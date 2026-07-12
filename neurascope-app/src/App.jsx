@@ -177,51 +177,28 @@ function getLayout(w, h) {
 }
 
 const PHASES = [
-  { key: "dissolve", label: "Image → particles", ms: 950,
-    caption: "Turning your strokes into signal",
+  { key: "dissolve", label: "Image → particles", ms: 900,
     formula: "784 pixels, one number each",
     note: "Every pixel your finger touched becomes a point of light — the raw data the network will read." },
   { key: "stream", label: "Normalizing & flattening", ms: 1100,
-    caption: "Feeding raw pixels into the network",
     formula: "x′ = x / 255 → x′ ∈ [0,1]⁷⁸⁴",
     note: "Pixel brightness (0–255) is rescaled to 0–1 and unrolled into a single list of 784 numbers." },
-  { key: "layer1", label: "Hidden layer 1", ms: 800,
-    caption: "Detecting edges, curves & strokes",
+  { key: "layer1", label: "Hidden layer 1", ms: 650,
     formula: "h₁ = ReLU(x′·W₁ + b₁),  W₁ ∈ ℝ⁷⁸⁴ˣ⁶⁴",
     note: "64 neurons each vote on a different pattern in your strokes — a corner, a curve, a straight edge." },
-  { key: "layer2", label: "Hidden layer 2", ms: 850,
-    caption: "Combining features into larger shapes",
+  { key: "layer2", label: "Hidden layer 2", ms: 650,
     formula: "h₂ = ReLU(h₁·W₂ + b₂),  W₂ ∈ ℝ⁶⁴ˣ³²",
     note: "32 neurons combine layer 1's votes into bigger shapes — loops, junctions, stroke endings." },
-  { key: "layer3", label: "Hidden layer 3", ms: 900,
-    caption: "Narrowing down the candidates",
+  { key: "layer3", label: "Hidden layer 3", ms: 650,
     formula: "h₃ = ReLU(h₂·W₃ + b₃),  W₃ ∈ ℝ³²ˣ¹⁶",
     note: "16 neurons distill those shapes into the handful of traits that actually separate one digit from another." },
-  { key: "output", label: "Output & softmax", ms: 1050,
-    caption: "Computing final probabilities",
+  { key: "output", label: "Output & softmax", ms: 900,
     formula: "p = softmax(h₃·W₄ + b₄) = eᶻⁱ⁄Σⱼeᶻʲ",
     note: "Ten raw scores are turned into ten probabilities that add up to exactly 100%." },
-  { key: "regroup", label: "Reforming the result", ms: 750,
-    caption: "Here's what it sees",
+  { key: "regroup", label: "Reforming the result", ms: 700,
     formula: "argmax(p), max(p)",
     note: "The class with the highest probability wins — that's the network's answer, and its confidence." },
 ];
-
-// smooth 0..1 -> 0..1 camera easing used between fixed phase "shots"
-const CAMERA_SHOTS = {
-  "-1": "scale(1) translate(0%,0%)",
-  0: "scale(1.05) translate(-4%,0%)",
-  1: "scale(1.1) translate(-8%,0%)",
-  2: "scale(1.18) translate(-11%,0%)",
-  3: "scale(1.12) translate(-1%,0%)",
-  4: "scale(1.18) translate(9%,0%)",
-  5: "scale(1.14) translate(15%,0%)",
-  6: "scale(1.02) translate(2%,0%)",
-};
-function getCameraTransform(stageState, phaseIndex) {
-  if (stageState !== "animating") return CAMERA_SHOTS["-1"];
-  return CAMERA_SHOTS[phaseIndex] || CAMERA_SHOTS["-1"];
-}
 
 function revealAt(phaseIndex, triggerIndex, t) {
   if (phaseIndex > triggerIndex) return 1;
@@ -250,7 +227,6 @@ export default function Neurascope() {
   const [topNeuron, setTopNeuron] = useState({ layer: "—", idx: "—", value: 0 });
   const [tensorSample, setTensorSample] = useState([]);
   const [detectors, setDetectors] = useState([]);
-  const [topCandidates, setTopCandidates] = useState([]);
 
   const drawCanvasRef = useRef(null);
   const previewCanvasRef = useRef(null);
@@ -455,23 +431,16 @@ export default function Neurascope() {
   /* ------------------------------ render frame -------------------------------- */
 
   const renderFrame = useCallback((pIdx, t) => {
-    const stage = layoutRef.current;
+    const layout = layoutRef.current;
     const acts = layerActRef.current;
-    if (!stage || !acts) return;
-    const stageLayout = stage.stage; // [input,h1,h2,h3,out] in STAGE-LOCAL pixel coords
+    if (!layout || !acts) return;
 
-    // --- particle canvas: dissolve / stream / regroup, with a soft motion-blur trail ---
+    // --- particle canvas (dissolve / stream / regroup) ---
     const flowCanvas = flowCanvasRef.current;
     if (flowCanvas) {
       const ctx = flowCanvas.getContext("2d");
+      ctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height);
       const particles = particlesRef.current;
-      if (pIdx === 0 || pIdx === 1 || pIdx === 6) {
-        // don't hard-clear: fade the previous frame instead so fast particles leave a light streak
-        ctx.fillStyle = "rgba(5,6,11,0.28)";
-        ctx.fillRect(0, 0, flowCanvas.width, flowCanvas.height);
-      } else {
-        ctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height);
-      }
       if (pIdx === 0) {
         // dissolve: particles glow in-place, draw canvas fades out
         const fadeT = easeOutCubic(t);
@@ -489,26 +458,16 @@ export default function Neurascope() {
         drawCanvasRef.current.style.opacity = "0.06";
         particles.forEach((p) => {
           const lt = easeInOutCubic(clamp01((t - p.delay) / (1 - p.delay)));
-          const trailLt = Math.max(0, lt - 0.07);
           const pos = quadBezier({ x: p.ox, y: p.oy }, { x: p.cx, y: p.cy }, { x: p.tx, y: p.ty }, lt);
-          const trailPos = quadBezier({ x: p.ox, y: p.oy }, { x: p.cx, y: p.cy }, { x: p.tx, y: p.ty }, trailLt);
           const a = p.alpha * (1 - 0.35 * lt);
           const size = p.size * (1 - 0.4 * lt);
-          const col = mixRgb(rampColor(0.55), { r: 255, g: 255, b: 255 }, lt * 0.4);
-          // elongated streak behind the particle = cheap motion blur, no persistence needed
-          ctx.strokeStyle = rgbStr(col, a * 0.55);
-          ctx.lineWidth = Math.max(0.5, size * 0.8);
           ctx.beginPath();
-          ctx.moveTo(trailPos.x, trailPos.y);
-          ctx.lineTo(pos.x, pos.y);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.fillStyle = rgbStr(col, a);
+          ctx.fillStyle = rgbStr(mixRgb(rampColor(0.55), { r: 255, g: 255, b: 255 }, lt * 0.4), a);
           ctx.arc(pos.x, pos.y, Math.max(0.6, size), 0, Math.PI * 2);
           ctx.fill();
         });
       } else if (pIdx === 6) {
-        const anchor = stage.resultAnchor;
+        const anchor = layoutRef.current.resultAnchor;
         const lt = easeInOutCubic(t);
         particles.forEach((p) => {
           const pos = quadBezier({ x: p.tx, y: p.ty }, { x: (p.tx + anchor.x) / 2, y: (p.ty + anchor.y) / 2 }, anchor, lt);
@@ -522,8 +481,7 @@ export default function Neurascope() {
       }
     }
 
-    // --- edge canvas: static weighted connections + traveling energy streams ---
-    // lives in STAGE-LOCAL space so it pans/zooms together with the neuron nodes (see ns-camera)
+    // --- edge canvas (fan lines + weighted connections) ---
     const edgeCanvas = edgeCanvasRef.current;
     if (edgeCanvas) {
       const ctx = edgeCanvas.getContext("2d");
@@ -531,8 +489,8 @@ export default function Neurascope() {
 
       const fanReveal = revealAt(pIdx, 1, t); // stream phase
       if (fanReveal > 0) {
-        const inputNode = stageLayout[0][0];
-        const h1 = stageLayout[1];
+        const inputNode = layout[0][0];
+        const h1 = layout[1];
         ctx.lineWidth = 1;
         for (let i = 0; i < h1.length; i += 3) {
           ctx.strokeStyle = rgbStr(rampColor(0.4), fanReveal * 0.16);
@@ -565,40 +523,9 @@ export default function Neurascope() {
           }
         }
       };
-      drawEdges(stageLayout[1], stageLayout[2], WEIGHTS.W[1], acts.h1norm, 3, acts.maxAbs[1]);
-      drawEdges(stageLayout[2], stageLayout[3], WEIGHTS.W[2], acts.h2norm, 4, acts.maxAbs[2]);
-      drawEdges(stageLayout[3], stageLayout[4], WEIGHTS.W[3], acts.h3norm, 5, acts.maxAbs[3]);
-
-      // traveling light streams along the strongest connections — bridges each layer
-      // transition with continuous motion instead of a hard cut to the next layer
-      const drawStreams = (edges, srcNodes, dstNodes, triggerIdx) => {
-        if (pIdx !== triggerIdx || !edges || !edges.length) return;
-        edges.forEach((e) => {
-          const lt = clamp01((t - e.delay) / (1 - e.delay));
-          if (lt <= 0 || lt >= 1) return;
-          const eased = easeInOutCubic(lt);
-          const s = srcNodes[e.si], d = dstNodes[e.di];
-          const x = s.x + (d.x - s.x) * eased;
-          const y = s.y + (d.y - s.y) * eased;
-          const tailX = s.x + (d.x - s.x) * Math.max(0, eased - 0.08);
-          const tailY = s.y + (d.y - s.y) * Math.max(0, eased - 0.08);
-          const col = rampColor(0.7 + e.strength * 0.3);
-          const glowA = e.strength * (1 - Math.abs(lt - 0.5) * 1.1);
-          ctx.strokeStyle = rgbStr(col, Math.max(0.15, glowA));
-          ctx.lineWidth = 1.6 + e.strength * 1.8;
-          ctx.beginPath();
-          ctx.moveTo(tailX, tailY);
-          ctx.lineTo(x, y);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.fillStyle = rgbStr(mixRgb(col, { r: 255, g: 255, b: 255 }, 0.5), Math.max(0.2, glowA));
-          ctx.arc(x, y, 1.6 + e.strength * 1.6, 0, Math.PI * 2);
-          ctx.fill();
-        });
-      };
-      drawStreams(acts.topEdges.h1h2, stageLayout[1], stageLayout[2], 3);
-      drawStreams(acts.topEdges.h2h3, stageLayout[2], stageLayout[3], 4);
-      drawStreams(acts.topEdges.h3out, stageLayout[3], stageLayout[4], 5);
+      drawEdges(layout[1], layout[2], WEIGHTS.W[1], acts.h1norm, 3, acts.maxAbs[1]);
+      drawEdges(layout[2], layout[3], WEIGHTS.W[2], acts.h2norm, 4, acts.maxAbs[2]);
+      drawEdges(layout[3], layout[4], WEIGHTS.W[3], acts.h3norm, 5, acts.maxAbs[3]);
     }
 
     // --- neuron nodes (DOM, imperative style writes) ---
@@ -621,16 +548,10 @@ export default function Neurascope() {
     paintLayer(3, acts.h3norm, 4);
     paintLayer(4, acts.probs, 5);
 
-    // --- throttled React state: bars, sidebar figures, evolving candidates ---
+    // --- throttled React state: bars, sidebar figures ---
     const outReveal = revealAt(pIdx, 5, t);
     setProbs(acts.probs.map((p) => p * outReveal));
     setConfidencePct(acts.probs[acts.predIdx] * outReveal * 100);
-
-    // top-3 candidates start converging during layer 3 (real values, revealed early for pacing)
-    const candReveal = pIdx < 4 ? 0 : pIdx === 4 ? t * 0.55 : pIdx === 5 ? 0.55 + t * 0.45 : 1;
-    if (candReveal > 0) {
-      setTopCandidates(acts.top3.map(({ digit, p }) => ({ digit, pct: p * candReveal * 100 })));
-    }
 
     let curLayerName = "—", curIdx = "—", curVal = 0;
     if (pIdx === 2) { curLayerName = "Hidden layer 1"; curIdx = acts.h1top; curVal = acts.h1[acts.h1top]; }
@@ -670,40 +591,10 @@ export default function Neurascope() {
       return m;
     };
 
-    const maxAbs = [null, maxAbsOf(WEIGHTS.W[1]), maxAbsOf(WEIGHTS.W[2]), maxAbsOf(WEIGHTS.W[3])];
-
-    // strongest connections per transition, used to draw traveling "energy stream" lights
-    // (na * weight-fraction, same importance measure the static edges use) — capped for perf/clarity
-    const topEdgesFor = (srcNorm, W, maxAbsW, cap) => {
-      const scored = [];
-      for (let i = 0; i < srcNorm.length; i++) {
-        const na = srcNorm[i];
-        if (na < 0.15) continue;
-        const row = W[i];
-        for (let j = 0; j < row.length; j++) {
-          const wf = Math.abs(row[j]) / maxAbsW;
-          const strength = na * wf;
-          if (strength > 0.1) scored.push({ si: i, di: j, strength });
-        }
-      }
-      scored.sort((a, b) => b.strength - a.strength);
-      return scored.slice(0, cap).map((e) => ({ ...e, delay: Math.random() * 0.35 }));
-    };
-    const topEdges = {
-      h1h2: topEdgesFor(h1norm, WEIGHTS.W[1], maxAbs[1], 40),
-      h2h3: topEdgesFor(h2norm, WEIGHTS.W[2], maxAbs[2], 34),
-      h3out: topEdgesFor(h3norm, WEIGHTS.W[3], maxAbs[3], 26),
-    };
-
-    const top3 = probs
-      .map((p, digit) => ({ digit, p }))
-      .sort((a, b) => b.p - a.p)
-      .slice(0, 3);
-
     layerActRef.current = {
       h1, h2, h3, probs, h1norm, h2norm, h3norm,
       h1top: argmax(h1), h2top: argmax(h2), h3top: argmax(h3), predIdx,
-      maxAbs, topEdges, top3,
+      maxAbs: [null, maxAbsOf(WEIGHTS.W[1]), maxAbsOf(WEIGHTS.W[2]), maxAbsOf(WEIGHTS.W[3])],
     };
     setPredicted(predIdx);
     setTensorSample(pre.tensor.slice(0, 8).map((v) => v.toFixed(2)));
@@ -730,34 +621,29 @@ export default function Neurascope() {
     const stageRect = nnStageRef.current.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    // flowCanvas spans the whole pipeline row (particles travel from the draw panel INTO the
-    // stage panel, so it needs wrapper-space); edgeCanvas lives entirely inside the stage panel
-    // and shares its "camera" transform, so it's sized to the stage panel itself.
-    const flowCanvas = flowCanvasRef.current;
-    if (flowCanvas) {
-      flowCanvas.width = wrapperRect.width * dpr;
-      flowCanvas.height = wrapperRect.height * dpr;
-      flowCanvas.style.width = wrapperRect.width + "px";
-      flowCanvas.style.height = wrapperRect.height + "px";
-      flowCanvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    const edgeCanvas = edgeCanvasRef.current;
-    if (edgeCanvas) {
-      edgeCanvas.width = stageRect.width * dpr;
-      edgeCanvas.height = stageRect.height * dpr;
-      edgeCanvas.style.width = stageRect.width + "px";
-      edgeCanvas.style.height = stageRect.height + "px";
-      edgeCanvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
+    [flowCanvasRef.current, edgeCanvasRef.current].forEach((c) => {
+      if (!c) return;
+      c.width = wrapperRect.width * dpr;
+      c.height = wrapperRect.height * dpr;
+      c.style.width = wrapperRect.width + "px";
+      c.style.height = wrapperRect.height + "px";
+      c.getContext("2d").scale(dpr, dpr);
+    });
 
     const localLayout = getLayout(stageRect.width, stageRect.height);
-    layoutRef.current = {
-      stage: localLayout, // stage-local pixel coords — used by the edge canvas + camera
-      resultAnchor: {
-        x: (stageRect.left - wrapperRect.left) + stageRect.width * 0.5,
-        y: (stageRect.top - wrapperRect.top) + stageRect.height * 0.5,
-      },
+    // convert to wrapper-space for canvases; DOM nodes use their own container's percent positioning separately
+    const wrapperLayout = localLayout.map((layerNodes) =>
+      layerNodes.map((n) => ({
+        x: n.x + (stageRect.left - wrapperRect.left),
+        y: n.y + (stageRect.top - wrapperRect.top),
+        r: n.r,
+      }))
+    );
+    wrapperLayout.resultAnchor = {
+      x: (stageRect.left - wrapperRect.left) + stageRect.width * 0.5,
+      y: (stageRect.top - wrapperRect.top) + stageRect.height * 0.5,
     };
+    layoutRef.current = wrapperLayout;
     particlesRef.current = buildParticles(pre.grid, wrapperRect, drawRect, stageRect, localLayout);
 
     return true;
@@ -837,7 +723,6 @@ export default function Neurascope() {
     setProbs(new Array(10).fill(0));
     setConfidencePct(0);
     setPredicted(null);
-    setTopCandidates([]);
     clearDrawCanvas();
     if (drawCanvasRef.current) drawCanvasRef.current.style.opacity = "1";
     const flow = flowCanvasRef.current, edge = edgeCanvasRef.current;
@@ -943,57 +828,36 @@ export default function Neurascope() {
           </div>
 
           <div className="ns-panel ns-stage-panel" ref={nnStageRef}>
+            <canvas ref={edgeCanvasRef} className="ns-edge-canvas" />
             <div className="ns-panel-label">Inside the network</div>
 
-            {/* everything that should pan/zoom together as the signal moves deeper lives in here */}
-            <div className="ns-camera" style={{ transform: getCameraTransform(stageState, phaseIndex) }}>
-              <canvas ref={edgeCanvasRef} className="ns-edge-canvas" />
-
-              <div className="ns-node ns-input-node" style={{ left: `${layoutForDom[0][0].x / 10}%`, top: `${(layoutForDom[0][0].y / 620) * 100}%` }}>
-                <canvas ref={previewCanvasRef} width={28} height={28} className="ns-preview-canvas" />
-              </div>
-
-              {LAYER_DEFS.slice(1).map((layer, li) => (
-                <React.Fragment key={layer.key}>
-                  {layoutForDom[li + 1].map((n, i) => (
-                    <div
-                      key={i}
-                      ref={(el) => (nodeRefs.current[li + 1][i] = el)}
-                      className={`ns-node ns-neuron ns-neuron-${layer.key}`}
-                      style={{
-                        left: `${(n.x / 1000) * 100}%`,
-                        top: `${(n.y / 620) * 100}%`,
-                        width: n.r * 2, height: n.r * 2,
-                      }}
-                    >
-                      {layer.key === "out" && <span className="ns-out-label">{i}</span>}
-                    </div>
-                  ))}
-                </React.Fragment>
-              ))}
+            <div className="ns-node ns-input-node" style={{ left: `${layoutForDom[0][0].x / 10}%`, top: `${(layoutForDom[0][0].y / 620) * 100}%` }}>
+              <canvas ref={previewCanvasRef} width={28} height={28} className="ns-preview-canvas" />
             </div>
+
+            {LAYER_DEFS.slice(1).map((layer, li) => (
+              <React.Fragment key={layer.key}>
+                {layoutForDom[li + 1].map((n, i) => (
+                  <div
+                    key={i}
+                    ref={(el) => (nodeRefs.current[li + 1][i] = el)}
+                    className={`ns-node ns-neuron ns-neuron-${layer.key}`}
+                    style={{
+                      left: `${(n.x / 1000) * 100}%`,
+                      top: `${(n.y / 620) * 100}%`,
+                      width: n.r * 2, height: n.r * 2,
+                    }}
+                  >
+                    {layer.key === "out" && <span className="ns-out-label">{i}</span>}
+                  </div>
+                ))}
+              </React.Fragment>
+            ))}
 
             {stageState === "idle" && (
               <div className="ns-stage-placeholder">
                 <Activity size={26} strokeWidth={1.4} />
                 <span>Draw a digit, then press “Read my drawing”</span>
-              </div>
-            )}
-
-            {stageState === "animating" && !stepMode && (
-              <div key={phaseIndex} className="ns-caption">{PHASES[phaseIndex].caption}…</div>
-            )}
-
-            {stageState === "animating" && phaseIndex >= 4 && topCandidates.length > 0 && (
-              <div className="ns-candidates">
-                <div className="ns-candidates-title">This looks like…</div>
-                {topCandidates.map((c) => (
-                  <div className="ns-candidate-row" key={c.digit}>
-                    <span className="ns-candidate-digit">{c.digit}</span>
-                    <div className="ns-candidate-bar"><div style={{ width: `${c.pct}%` }} /></div>
-                    <span className="ns-candidate-pct">{c.pct.toFixed(0)}%</span>
-                  </div>
-                ))}
               </div>
             )}
 
@@ -1180,19 +1044,7 @@ function StyleBlock() {
       .ns-retrain-btn { width:100%; display:flex; align-items:center; justify-content:center; gap:6px; padding:8px; background:transparent; border:1px dashed var(--border-glass); border-radius:9px; color:var(--text-dim); font-size:11.5px; }
 
       .ns-stage-panel { flex:1; min-height:560px; overflow:hidden; }
-      .ns-camera { position:absolute; inset:0; transition:transform 950ms cubic-bezier(.22,.68,.32,1); transform-origin:50% 50%; will-change:transform; }
-      .ns-edge-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-      .ns-caption { position:absolute; top:38px; left:16px; right:16px; text-align:center; font-family:'Space Grotesk',sans-serif;
-        font-weight:600; font-size:15px; letter-spacing:0.01em; color:#e6f6fb; text-shadow:0 0 18px rgba(56,189,248,0.45);
-        animation:ns-caption-in 600ms ease both; pointer-events:none; }
-      @keyframes ns-caption-in { from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:translateY(0);} }
-      .ns-candidates { position:absolute; top:52px; right:16px; width:190px; background:rgba(5,6,11,0.6); border:1px solid var(--border-glass);
-        border-radius:12px; padding:12px; backdrop-filter:blur(8px); animation:ns-caption-in 500ms ease both; }
-      .ns-candidates-title { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); margin-bottom:8px; }
-      .ns-candidate-row { display:grid; grid-template-columns:14px 1fr 30px; align-items:center; gap:7px; margin-bottom:6px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-dim); }
-      .ns-candidate-digit { color:var(--text-primary); font-weight:600; }
-      .ns-candidate-bar { height:4px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden; }
-      .ns-candidate-bar div { height:100%; background:linear-gradient(90deg,#22d3ee,#f97316); transition:width .12s linear; }
+      .ns-edge-canvas { position:absolute; inset:16px; width:calc(100% - 32px); height:calc(100% - 32px); pointer-events:none; }
       .ns-node { position:absolute; border-radius:50%; }
       .ns-input-node { width:64px; height:64px; transform:translate(-50%,-50%); border-radius:8px; overflow:hidden; border:1px solid rgba(148,163,184,0.35); box-shadow:0 0 24px -4px rgba(56,189,248,0.35); }
       .ns-preview-canvas { width:100%; height:100%; image-rendering:pixelated; }
